@@ -1,10 +1,24 @@
 const API_BASE = 'http://localhost:8451/api';
 let currentUser = null;
 let serverTimeOffset = 0;
+const CATEGORIES = ['全部', '古董', '珠宝', '艺术品', '电子', '其他'];
 
 function getToken() { return localStorage.getItem('token'); }
 function setToken(t) { localStorage.setItem('token', t); }
 function removeToken() { localStorage.removeItem('token'); }
+
+function highlightText(text, keyword) {
+  if (!keyword || !text) return text;
+  const safeKw = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const regex = new RegExp(`(${safeKw})`, 'gi');
+  return text.toString().replace(regex, '<span class="highlight">$1</span>');
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text || '';
+  return div.innerHTML;
+}
 
 async function apiRequest(url, options = {}) {
   const token = getToken();
@@ -132,8 +146,27 @@ function logout() {
 async function renderHome() {
   document.getElementById('app').innerHTML = '<div class="container"><div style="text-align:center;padding:40px">加载中...</div></div>';
   try {
-    const items = await apiRequest('/items');
     let filter = localStorage.getItem('filter') || 'all';
+    let category = localStorage.getItem('category') || '全部';
+    let sort = localStorage.getItem('sort') || 'default';
+    let keyword = localStorage.getItem('searchKeyword') || '';
+    let minPrice = localStorage.getItem('minPrice') || '';
+    let maxPrice = localStorage.getItem('maxPrice') || '';
+
+    let items;
+    const useSearch = keyword || category !== '全部' || minPrice || maxPrice || sort === 'hot';
+    if (useSearch) {
+      const params = new URLSearchParams();
+      if (keyword) params.append('q', keyword);
+      if (category !== '全部') params.append('category', category);
+      if (minPrice) params.append('min_price', minPrice);
+      if (maxPrice) params.append('max_price', maxPrice);
+      if (filter !== 'all') params.append('status', filter);
+      if (sort === 'hot') params.append('sort', 'hot');
+      items = await apiRequest(`/items/search?${params.toString()}`);
+    } else {
+      items = await apiRequest('/items');
+    }
     const filtered = filter === 'all' ? items : items.filter(i => i.status === filter);
     document.getElementById('app').innerHTML = `
       <div class="container">
@@ -143,14 +176,31 @@ async function renderHome() {
             ${currentUser ? `<button class="btn btn-primary" onclick="location.hash='#/publish'">+ 发布拍品</button>` : ''}
           </span>
         </div>
+        <div class="search-bar">
+          <div class="search-row">
+            <input class="search-input" id="searchInput" placeholder="搜索拍品名称或描述..." value="${escapeHtml(keyword)}">
+            <input type="number" class="search-input search-price" id="minPriceInput" placeholder="最低价" value="${minPrice}">
+            <span style="color:#888">-</span>
+            <input type="number" class="search-input search-price" id="maxPriceInput" placeholder="最高价" value="${maxPrice}">
+            <button class="btn btn-primary" onclick="doSearch()">搜索</button>
+            ${keyword || minPrice || maxPrice ? `<button class="btn btn-secondary" onclick="clearSearch()">清除</button>` : ''}
+          </div>
+        </div>
+        <div class="category-tabs">
+          ${CATEGORIES.map(c => `<span class="category-tab ${category===c?'active':''}" onclick="setCategory('${c}')">${c}</span>`).join('')}
+        </div>
         <div class="filter-bar">
           <span class="filter-chip ${filter==='all'?'active':''}" onclick="setFilter('all')">全部</span>
           <span class="filter-chip ${filter==='active'?'active':''}" onclick="setFilter('active')">进行中</span>
           <span class="filter-chip ${filter==='pending'?'active':''}" onclick="setFilter('pending')">即将开始</span>
           <span class="filter-chip ${filter==='ended'?'active':''}" onclick="setFilter('ended')">已结束</span>
+          <span style="flex:1"></span>
+          <span class="sort-label">排序：</span>
+          <span class="filter-chip ${sort==='default'?'active':''}" onclick="setSort('default')">默认</span>
+          <span class="filter-chip ${sort==='hot'?'active':''}" onclick="setSort('hot')">🔥 热门</span>
         </div>
         <div class="card-grid" id="itemGrid">
-          ${filtered.map(renderItemCard).join('') || '<div class="empty-state" style="grid-column:1/-1"><div class="empty-icon">📭</div>暂无拍品</div>'}
+          ${filtered.length ? filtered.map(item => renderItemCard(item, keyword)).join('') : '<div class="empty-state" style="grid-column:1/-1"><div class="empty-icon">📭</div>暂无拍品</div>'}
         </div>
       </div>`;
     startHomeCountdown();
@@ -159,16 +209,46 @@ async function renderHome() {
   }
 }
 
+function doSearch() {
+  const kw = document.getElementById('searchInput').value.trim();
+  const minP = document.getElementById('minPriceInput').value.trim();
+  const maxP = document.getElementById('maxPriceInput').value.trim();
+  localStorage.setItem('searchKeyword', kw);
+  localStorage.setItem('minPrice', minP);
+  localStorage.setItem('maxPrice', maxP);
+  renderHome();
+}
+
+function clearSearch() {
+  localStorage.removeItem('searchKeyword');
+  localStorage.removeItem('minPrice');
+  localStorage.removeItem('maxPrice');
+  renderHome();
+}
+
+function setCategory(c) {
+  localStorage.setItem('category', c);
+  renderHome();
+}
+
+function setSort(s) {
+  localStorage.setItem('sort', s);
+  renderHome();
+}
+
 function setFilter(f) {
   localStorage.setItem('filter', f);
   renderHome();
 }
 
-function renderItemCard(item) {
+function renderItemCard(item, keyword) {
   const currentPrice = item.current_price || item.start_price;
+  const kw = keyword || localStorage.getItem('searchKeyword') || '';
+  const displayTitle = kw ? highlightText(escapeHtml(item.title), kw) : escapeHtml(item.title);
+  const displayDesc = kw ? highlightText(escapeHtml(item.description || '暂无描述'), kw) : escapeHtml(item.description || '暂无描述');
   return `
     <div class="card item-card" onclick="location.hash='#/item/${item.id}'">
-      <img src="${item.image_url}" alt="${item.title}" class="item-image" onerror="this.src='https://via.placeholder.com/400x200?text=No+Image'">
+      <img src="${item.image_url}" alt="${escapeHtml(item.title)}" class="item-image" onerror="this.src='https://via.placeholder.com/400x200?text=No+Image'">
       <div class="item-body">
         <div style="display:flex;justify-content:space-between;align-items:center">
           <span class="status-badge ${statusClass(item.status)}">${statusText(item.status)}</span>
@@ -176,10 +256,14 @@ function renderItemCard(item) {
             ${item.status === 'active' ? formatCountdown(getCountdown(item.end_time)) : item.status === 'pending' ? `距开始: ${formatCountdown(getCountdown(item.start_time))}` : '已结束'}
           </span>
         </div>
-        <div class="item-title">${item.title}</div>
-        <div class="item-desc">${item.description || '暂无描述'}</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin:4px 0">
+          <span class="item-category">${escapeHtml(item.category || '其他')}</span>
+          ${item.buy_now_price && item.status !== 'ended' ? `<span style="font-size:12px;color:#d97706;font-weight:600">⚡ ${formatMoney(item.buy_now_price)}</span>` : ''}
+        </div>
+        <div class="item-title">${displayTitle}</div>
+        <div class="item-desc">${displayDesc}</div>
         <div class="item-meta">
-          <span>卖家: ${item.seller_name}</span>
+          <span>卖家: ${escapeHtml(item.seller_name)}</span>
           <span>${item.bid_count || 0} 次出价</span>
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center">
@@ -263,14 +347,19 @@ async function doAuth(mode) {
 
 let detailTimer = null;
 let itemDetailCache = null;
+let proxyBidCache = null;
 async function renderItemDetail(id) {
   if (detailTimer) clearInterval(detailTimer);
   document.getElementById('app').innerHTML = '<div class="container"><div style="text-align:center;padding:40px">加载中...</div></div>';
   try {
     const item = await apiRequest(`/items/${id}`);
     itemDetailCache = item;
+    if (currentUser) {
+      try { proxyBidCache = await apiRequest(`/items/${id}/proxy`); } catch(e) { proxyBidCache = null; }
+    }
     const currentPrice = item.current_price || item.start_price;
     const minBid = currentPrice + item.min_increment;
+    const categoryOptions = ['古董', '珠宝', '艺术品', '电子', '其他'];
     document.getElementById('app').innerHTML = `
       <div class="container">
         <div class="detail-layout">
@@ -279,13 +368,21 @@ async function renderItemDetail(id) {
               <img src="${item.image_url}" class="detail-image" onerror="this.src='https://via.placeholder.com/600x400?text=No+Image'">
               <div style="margin-top:20px">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-                  <h1 style="font-size:24px">${item.title}</h1>
+                  <h1 style="font-size:24px">${escapeHtml(item.title)}</h1>
                   <span class="status-badge ${statusClass(item.status)}">${statusText(item.status)}</span>
                 </div>
-                <p style="color:#555;line-height:1.8;margin-bottom:20px">${item.description || '暂无描述'}</p>
-                <div class="info-row"><span class="info-label">卖家</span><span class="info-value">${item.seller_name}</span></div>
+                <div style="display:flex;gap:8px;margin-bottom:16px;align-items:center;flex-wrap:wrap">
+                  <span class="item-category">${escapeHtml(item.category || '其他')}</span>
+                  ${item.buy_now_price && item.status !== 'ended' ? `<span style="font-size:14px;color:#d97706;font-weight:600">⚡ 一口价 ${formatMoney(item.buy_now_price)}</span>` : ''}
+                  ${item.deposit_amount ? `<span style="font-size:12px;color:#1e40af;padding:2px 10px;background:#eff6ff;border-radius:10px">🔒 保证金 ${formatMoney(item.deposit_amount)}</span>` : ''}
+                </div>
+                <p style="color:#555;line-height:1.8;margin-bottom:20px">${escapeHtml(item.description || '暂无描述')}</p>
+                <div class="info-row"><span class="info-label">卖家</span><span class="info-value">${escapeHtml(item.seller_name)}</span></div>
+                <div class="info-row"><span class="info-label">分类</span><span class="info-value">${escapeHtml(item.category || '其他')}</span></div>
                 <div class="info-row"><span class="info-label">起拍价</span><span class="info-value">${formatMoney(item.start_price)}</span></div>
                 <div class="info-row"><span class="info-label">最低加价</span><span class="info-value">${formatMoney(item.min_increment)}</span></div>
+                <div class="info-row"><span class="info-label">保证金</span><span class="info-value">${formatMoney(item.deposit_amount || item.start_price * 0.1)}</span></div>
+                ${item.buy_now_price ? `<div class="info-row"><span class="info-label">一口价</span><span class="info-value" style="color:#d97706;font-weight:600">${formatMoney(item.buy_now_price)}</span></div>` : ''}
                 <div class="info-row"><span class="info-label">开始时间</span><span class="info-value">${formatTime(item.start_time)}</span></div>
                 <div class="info-row"><span class="info-label">结束时间</span><span class="info-value" id="detailEndTime">${formatTime(item.end_time)}</span></div>
                 ${item.status === 'ended' && item.winner_id ? `
@@ -301,7 +398,8 @@ async function renderItemDetail(id) {
                 ${item.bids.length ? item.bids.map(b => `
                   <div class="bid-item">
                     <div>
-                      <span class="bid-user">${b.username}</span>
+                      <span class="bid-user">${escapeHtml(b.username)}</span>
+                      ${b.is_proxy ? '<span class="proxy-tag">代理出价</span>' : ''}
                       <span style="margin-left:10px" class="bid-amount">${formatMoney(b.amount)}</span>
                     </div>
                     <span class="bid-time">${formatTime(b.created_at)}</span>
@@ -320,11 +418,19 @@ async function renderItemDetail(id) {
       <div class="modal-overlay" id="editModal">
         <div class="modal">
           <div class="modal-title">编辑拍品</div>
-          <div class="form-group"><label class="form-label">标题</label><input class="form-input" id="editTitle" value="${item.title}"></div>
-          <div class="form-group"><label class="form-label">描述</label><textarea class="form-input" id="editDesc">${item.description || ''}</textarea></div>
-          <div class="form-group"><label class="form-label">图片URL</label><input class="form-input" id="editImage" value="${item.image_url || ''}"></div>
+          <div class="form-group"><label class="form-label">标题</label><input class="form-input" id="editTitle" value="${escapeHtml(item.title)}"></div>
+          <div class="form-group"><label class="form-label">描述</label><textarea class="form-input" id="editDesc">${escapeHtml(item.description || '')}</textarea></div>
+          <div class="form-group"><label class="form-label">图片URL</label><input class="form-input" id="editImage" value="${escapeHtml(item.image_url || '')}"></div>
+          <div class="form-group">
+            <label class="form-label">分类</label>
+            <select class="category-select" id="editCategory">
+              ${categoryOptions.map(c => `<option value="${c}" ${c===item.category?'selected':''}>${c}</option>`).join('')}
+            </select>
+          </div>
           <div class="form-group"><label class="form-label">起拍价</label><input type="number" class="form-input" id="editStartPrice" value="${item.start_price}"></div>
           <div class="form-group"><label class="form-label">最低加价</label><input type="number" class="form-input" id="editMinInc" value="${item.min_increment}"></div>
+          <div class="form-group"><label class="form-label">保证金</label><input type="number" class="form-input" id="editDeposit" value="${item.deposit_amount || ''}"></div>
+          <div class="form-group"><label class="form-label">一口价（可选）</label><input type="number" class="form-input" id="editBuyNow" value="${item.buy_now_price || ''}"></div>
           <div class="modal-actions">
             <button class="btn btn-secondary" onclick="closeModal()">取消</button>
             <button class="btn btn-primary" onclick="submitEdit(${item.id})">保存</button>
@@ -345,8 +451,12 @@ function renderBidPanel(item, currentPrice, minBid) {
         <div class="price-label">距开始还有</div>
         <div class="countdown" style="font-size:24px" id="pendingCountdown">${formatCountdown(getCountdown(item.start_time))}</div>
       </div>
+      <div class="deposit-info">
+        🔒 参与出价需缴纳保证金 <b>${formatMoney(item.deposit_amount || item.start_price * 0.1)}</b><br>
+        未中标将在拍卖结束后自动退还
+      </div>
       ${currentUser && item.seller_id === currentUser.id ? `
-        <button class="btn btn-secondary" style="width:100%" onclick="openModal()">编辑拍品</button>
+        <button class="btn btn-secondary" style="width:100%;margin-top:12px" onclick="openModal()">编辑拍品</button>
       ` : ''}`;
   }
   if (item.status === 'ended') {
@@ -356,7 +466,14 @@ function renderBidPanel(item, currentPrice, minBid) {
     return `
       <h3 style="text-align:center">请先登录参与竞拍</h3>
       <div class="current-price">${formatMoney(currentPrice)}</div>
-      <button class="btn btn-primary bid-btn" onclick="location.hash='#/login'">登录参与竞拍</button>`;
+      <div class="deposit-info">
+        🔒 参与出价需缴纳保证金 <b>${formatMoney(item.deposit_amount || item.start_price * 0.1)}</b>
+      </div>
+      ${item.buy_now_price && currentPrice < item.buy_now_price ? `
+        <div class="buy-now-section" style="margin-top:12px">
+          <div class="buy-now-price">⚡ 一口价 ${formatMoney(item.buy_now_price)}</div>
+        </div>` : ''}
+      <button class="btn btn-primary bid-btn" style="margin-top:12px" onclick="location.hash='#/login'">登录参与竞拍</button>`;
   }
   if (item.seller_id === currentUser.id) {
     return `
@@ -368,6 +485,8 @@ function renderBidPanel(item, currentPrice, minBid) {
         <div class="countdown" style="font-size:24px" id="activeCountdown">${formatCountdown(getCountdown(item.end_time))}</div>
       </div>`;
   }
+  const showBuyNow = item.buy_now_price && currentPrice < item.buy_now_price;
+  const proxy = proxyBidCache;
   return `
     <h3 style="text-align:center">实时竞拍</h3>
     <div style="text-align:center">
@@ -378,6 +497,13 @@ function renderBidPanel(item, currentPrice, minBid) {
       <div class="price-label">距结束</div>
       <div class="countdown" style="font-size:20px" id="activeCountdown">${formatCountdown(getCountdown(item.end_time))}</div>
     </div>
+
+    ${showBuyNow ? `
+      <div class="buy-now-section">
+        <div class="buy-now-price">⚡ 一口价 ${formatMoney(item.buy_now_price)}</div>
+        <button class="btn btn-buy-now" onclick="confirmBuyNow(${item.id})">立即购买</button>
+      </div>` : ''}
+
     <div class="bid-input-row">
       <input type="number" class="bid-input" id="bidInput" placeholder="最低 ${minBid}" min="${minBid}" value="${minBid}" step="${item.min_increment}">
     </div>
@@ -387,10 +513,72 @@ function renderBidPanel(item, currentPrice, minBid) {
       <button class="quick-bid" onclick="addQuickBid(100, ${item.min_increment})">+100</button>
     </div>
     <button class="btn btn-primary bid-btn" id="placeBidBtn" onclick="placeBid(${item.id})">立即出价</button>
+
+    <div class="proxy-section">
+      <div class="proxy-section-title">
+        🤖 代理出价
+        ${proxy && proxy.is_active ? `
+          <span style="margin-left:auto;font-weight:500;font-size:12px;color:#16a34a">
+            已启用上限 ${formatMoney(proxy.max_amount)}
+            <button class="btn-cancel-proxy" onclick="cancelProxyBid(${item.id})">取消</button>
+          </span>` : ''}
+      </div>
+      <div class="proxy-input-row">
+        <input type="number" class="proxy-input" id="proxyInput" placeholder="设置代理出价上限" min="${minBid}" value="${proxy && proxy.is_active ? proxy.max_amount : ''}">
+        <button class="btn btn-proxy" onclick="setProxyBid(${item.id})">${proxy && proxy.is_active ? '修改' : '启用'}</button>
+      </div>
+      <div class="proxy-info">
+        设置后系统将自动以最小加价幅度替您跟价，直到达到您设置的上限。<br>
+        同一拍品最多只能设置一个代理出价，可随时修改或取消。
+      </div>
+    </div>
+
+    <div class="deposit-info">
+      🔒 参与出价需缴纳保证金 <b>${formatMoney(item.deposit_amount || item.start_price * 0.1)}</b><br>
+      未中标将在拍卖结束后自动退还，中标则抵扣货款
+    </div>
     <div style="margin-top:12px;font-size:12px;color:#888;text-align:center">
       每次加价不低于 ${formatMoney(item.min_increment)}<br>
       最后5分钟出价自动延时3分钟
     </div>`;
+}
+
+async function confirmBuyNow(itemId) {
+  if (!confirm('确认以一口价购买此商品？')) return;
+  try {
+    await apiRequest(`/items/${itemId}/buy_now`, { method: 'POST' });
+    showToast('购买成功！', 'success');
+    refreshUser();
+    renderItemDetail(itemId);
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+async function setProxyBid(itemId) {
+  const input = document.getElementById('proxyInput');
+  const maxAmount = parseFloat(input.value);
+  if (!maxAmount || isNaN(maxAmount)) return showToast('请输入有效金额', 'error');
+  try {
+    const res = await apiRequest(`/items/${itemId}/proxy`, {
+      method: 'POST',
+      body: JSON.stringify({ max_amount: maxAmount })
+    });
+    proxyBidCache = res.proxy;
+    showToast('代理出价已' + (res.message ? '取消' : '设置'), 'success');
+    refreshUser();
+    renderItemDetail(itemId);
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+async function cancelProxyBid(itemId) {
+  try {
+    await apiRequest(`/items/${itemId}/proxy`, {
+      method: 'POST',
+      body: JSON.stringify({ max_amount: 0 })
+    });
+    proxyBidCache = null;
+    showToast('已取消代理出价', 'success');
+    renderItemDetail(itemId);
+  } catch (e) { showToast(e.message, 'error'); }
 }
 
 function renderEndedPanel(item) {
@@ -520,8 +708,11 @@ async function submitEdit(itemId) {
     title: document.getElementById('editTitle').value,
     description: document.getElementById('editDesc').value,
     image_url: document.getElementById('editImage').value,
+    category: document.getElementById('editCategory').value,
     start_price: document.getElementById('editStartPrice').value,
-    min_increment: document.getElementById('editMinInc').value
+    min_increment: document.getElementById('editMinInc').value,
+    deposit_amount: document.getElementById('editDeposit').value,
+    buy_now_price: document.getElementById('editBuyNow').value || null
   };
   try {
     await apiRequest(`/items/${itemId}`, { method: 'PUT', body: JSON.stringify(data) });
@@ -686,6 +877,7 @@ function renderPublish() {
   const now = new Date();
   const nowStr = now.toISOString().slice(0, 16);
   const later = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString().slice(0, 16);
+  const categoryOptions = ['古董', '珠宝', '艺术品', '电子', '其他'];
   document.getElementById('app').innerHTML = `
     <div class="container">
       <div class="page-title">发布拍品</div>
@@ -693,8 +885,22 @@ function renderPublish() {
         <div class="form-group"><label class="form-label">拍品标题 *</label><input class="form-input" id="pTitle" placeholder="例：复古机械腕表"></div>
         <div class="form-group"><label class="form-label">描述</label><textarea class="form-input" id="pDesc" placeholder="详细介绍拍品..."></textarea></div>
         <div class="form-group"><label class="form-label">图片URL</label><input class="form-input" id="pImage" placeholder="https://..."></div>
+        <div class="form-group">
+          <label class="form-label">分类 *</label>
+          <select class="category-select" id="pCategory">
+            ${categoryOptions.map(c => `<option value="${c}">${c}</option>`).join('')}
+          </select>
+        </div>
         <div class="form-group"><label class="form-label">起拍价 *</label><input type="number" class="form-input" id="pStart" placeholder="100" min="1"></div>
         <div class="form-group"><label class="form-label">每次最低加价 *</label><input type="number" class="form-input" id="pInc" placeholder="10" min="1"></div>
+        <div class="form-group">
+          <label class="form-label">保证金（默认起拍价的10%）</label>
+          <input type="number" class="form-input" id="pDeposit" placeholder="留空则自动计算" min="0">
+        </div>
+        <div class="form-group">
+          <label class="form-label">一口价（可选，留空则不启用）</label>
+          <input type="number" class="form-input" id="pBuyNow" placeholder="立即购买的一口价" min="0">
+        </div>
         <div class="form-group"><label class="form-label">拍卖开始时间 *</label><input type="datetime-local" class="form-input" id="pStartT" value="${nowStr}"></div>
         <div class="form-group"><label class="form-label">拍卖结束时间 *</label><input type="datetime-local" class="form-input" id="pEndT" value="${later}"></div>
         <button class="btn btn-primary form-btn" onclick="submitPublish()">发布拍品</button>
@@ -707,8 +913,11 @@ async function submitPublish() {
     title: document.getElementById('pTitle').value.trim(),
     description: document.getElementById('pDesc').value,
     image_url: document.getElementById('pImage').value,
+    category: document.getElementById('pCategory').value,
     start_price: document.getElementById('pStart').value,
     min_increment: document.getElementById('pInc').value,
+    deposit_amount: document.getElementById('pDeposit').value,
+    buy_now_price: document.getElementById('pBuyNow').value || null,
     start_time: new Date(document.getElementById('pStartT').value).toISOString(),
     end_time: new Date(document.getElementById('pEndT').value).toISOString()
   };

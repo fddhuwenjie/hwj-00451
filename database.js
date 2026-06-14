@@ -23,8 +23,11 @@ function initDatabase() {
           title TEXT NOT NULL,
           description TEXT,
           image_url TEXT,
+          category TEXT DEFAULT '其他',
           start_price REAL NOT NULL,
           min_increment REAL NOT NULL DEFAULT 10,
+          deposit_amount REAL,
+          buy_now_price REAL,
           start_time DATETIME NOT NULL,
           end_time DATETIME NOT NULL,
           seller_id INTEGER NOT NULL,
@@ -42,6 +45,31 @@ function initDatabase() {
           item_id INTEGER NOT NULL,
           user_id INTEGER NOT NULL,
           amount REAL NOT NULL,
+          is_proxy INTEGER DEFAULT 0,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (item_id) REFERENCES items(id),
+          FOREIGN KEY (user_id) REFERENCES users(id)
+        )`);
+
+        await run(`CREATE TABLE IF NOT EXISTS proxy_bids (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          item_id INTEGER NOT NULL,
+          user_id INTEGER NOT NULL,
+          max_amount REAL NOT NULL,
+          is_active INTEGER DEFAULT 1,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (item_id) REFERENCES items(id),
+          FOREIGN KEY (user_id) REFERENCES users(id),
+          UNIQUE(item_id, user_id)
+        )`);
+
+        await run(`CREATE TABLE IF NOT EXISTS deposits (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          item_id INTEGER NOT NULL,
+          user_id INTEGER NOT NULL,
+          amount REAL NOT NULL,
+          status TEXT DEFAULT 'frozen',
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
           FOREIGN KEY (item_id) REFERENCES items(id),
           FOREIGN KEY (user_id) REFERENCES users(id)
@@ -120,8 +148,11 @@ function seedData() {
           title: '复古机械腕表',
           description: '1960年代瑞士制造，全机械机芯，走时精准，收藏佳品。',
           image_url: 'https://images.unsplash.com/photo-1524592094714-0f0654e20314?w=600',
+          category: '古董',
           start_price: 500,
           min_increment: 50,
+          deposit_amount: 50,
+          buy_now_price: 5000,
           start_time: new Date(now - 2 * 60 * 60 * 1000).toISOString(),
           end_time: new Date(now + 30 * 60 * 1000).toISOString(),
           seller_id_idx: 0,
@@ -131,8 +162,11 @@ function seedData() {
           title: '限量版签名版画',
           description: '当代著名艺术家限量签名版画，全球仅50幅，附真品证书。',
           image_url: 'https://images.unsplash.com/photo-1579783902614-a3fb3927b6a5?w=600',
+          category: '艺术品',
           start_price: 2000,
           min_increment: 100,
+          deposit_amount: 200,
+          buy_now_price: 8000,
           start_time: new Date(now + 1 * 60 * 60 * 1000).toISOString(),
           end_time: new Date(now + 25 * 60 * 60 * 1000).toISOString(),
           seller_id_idx: 1,
@@ -142,8 +176,11 @@ function seedData() {
           title: '经典黑胶唱片套装',
           description: '披头士全套原版黑胶唱片，品相极佳，音质完美。',
           image_url: 'https://images.unsplash.com/photo-1539375665275-f9de415ef9ac?w=600',
+          category: '其他',
           start_price: 300,
           min_increment: 20,
+          deposit_amount: 30,
+          buy_now_price: 1500,
           start_time: new Date(now - 48 * 60 * 60 * 1000).toISOString(),
           end_time: new Date(now - 2 * 60 * 60 * 1000).toISOString(),
           seller_id_idx: 2,
@@ -153,12 +190,16 @@ function seedData() {
         }
       ];
 
-      const itemStmt = db.prepare("INSERT INTO items (title, description, image_url, start_price, min_increment, start_time, end_time, seller_id, status, final_price, winner_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+      const itemStmt = db.prepare("INSERT INTO items (title, description, image_url, category, start_price, min_increment, deposit_amount, buy_now_price, start_time, end_time, seller_id, status, final_price, winner_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
       const itemIds = [];
       for (const item of items) {
         const result = await stmtRun(itemStmt, [
           item.title, item.description, item.image_url,
-          item.start_price, item.min_increment, item.start_time,
+          item.category || '其他',
+          item.start_price, item.min_increment,
+          item.deposit_amount !== undefined ? item.deposit_amount : item.start_price * 0.1,
+          item.buy_now_price !== undefined ? item.buy_now_price : null,
+          item.start_time,
           item.end_time, userIds[item.seller_id_idx], item.status,
           item.final_price || null, item.winner_id_idx !== undefined ? userIds[item.winner_id_idx] : null
         ]);
